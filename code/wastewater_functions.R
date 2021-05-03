@@ -28,9 +28,10 @@ getCountParams <- function(obs_type){
   switch(obs_type,
          incubation = getGammaParams(5.3, 3.2),
          zero = list(shape = 0, scale = 0),
-         confirmed = getGammaParams(5.5, 3.8),
+         #confirmed = getGammaParams(5.5, 3.8),
          confirmed_zh = getGammaParams(2.83, 2.96),
-         confirmed_cali = getGammaParams(5.067, 5.64),
+         confirmed_cali = getGammaParams(4.51, 3.16),
+         death = getGammaParams(15.0, 6.9),
          han = getGammaParams(4.7, 1.7),
          wolfel = getGammaParams(8.6, 0.9),
          benefield = list(shape = 0.929639, scale = 7.241397))

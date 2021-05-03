@@ -63,25 +63,16 @@ R_data <- R_data_raw %>%
   filter(!Method %in% methods_to_exclude)
 
 ###### Case data #####
-
 urlfile <- "https://data.chhs.ca.gov/dataset/f333528b-4d38-4814-bebb-12db1f10f535/resource/046cdd2b-31e5-4d34-9ed3-b48cdbc4be7a/download/covid19cases_test.csv"
 
 cali_case_data <- read_csv(urlfile)
 county_list = "Santa Clara"
-
-ggplot(cali_case_data %>% filter(area %in% county_list, date >= as_date("2020-11-01")) )  +
-  geom_bar(aes(x=date, y= abs(reported_cases)), stat = "identity", fill = 'red', size = 1.5) +
-  labs(x = 'Date' , y='COVID cases and deaths') +
-  scale_x_date(date_breaks = "4 weeks",
-               date_labels = '%b\n%d'
-  )
 
 ## Clean data 
 first_clean_cali_case_data <- cali_case_data %>%
   filter(area %in% county_list,
          !is.na(date)) %>%
   mutate(confirmed = ifelse(reported_cases <0, 0, reported_cases),
-         deaths = ifelse(reported_deaths <0, 0, reported_deaths),
          county = area) %>%
   mutate(orig_data = TRUE) %>%
   select(date, county, confirmed, deaths, orig_data) %>%
@@ -91,6 +82,28 @@ clean_cali_case_data <- first_clean_cali_case_data %>%
   mutate(location = recode(county,
                            "Santa Clara" = "SanJose") )
 
+
+## Add testing-adjusted cases (test positivity) ####
+mean_tests <- cali_case_data %>% 
+  filter(area %in% county_list,
+         !is.na(date)) %>%
+  pull(total_tests) %>%
+  mean(., na.rm = T)
+
+# Note: positive and total tests are by estimated
+# testing date, not reporting date!
+cali_testpos_data <- cali_case_data %>%
+  filter(area %in% county_list,
+         !is.na(date)) %>%
+  mutate(test_pos = (positive_tests / total_tests)*mean_tests,
+         county = area) %>%
+  filter(date >= as_date("2020-11-01"))
+
+sub_testpos <- cali_testpos_data %>%
+  select(date, test_pos)
+
+clean_cali_case_data <- clean_cali_case_data %>%
+  left_join(sub_testpos, by = "date") 
 
 ###### Plot #######################
 
@@ -106,7 +119,7 @@ case_data_plot <- ggplot(plot_orig_cases) +
   labs(colour = 'Variable') 
 
 case_data_plot
-ggsave(plot = case_data_plot, paste0(plot_dir, '/', 'Case_data_Cali.pdf'), height = 11, width = 9)
+#ggsave(plot = case_data_plot, paste0(plot_dir, '/', 'SJ_case_data.pdf'), height = 11, width = 9)
 
 
 
@@ -115,13 +128,13 @@ ggsave(plot = case_data_plot, paste0(plot_dir, '/', 'Case_data_Cali.pdf'), heigh
 deconv_result_c <- data.frame()
 result_c <- data.frame()
 for (location_i in unique(clean_cali_case_data$county)){
-  for (incidence_var_i in c('confirmed')){
+  for (incidence_var_i in c('confirmed', 'test_pos')){
     select_data <- clean_cali_case_data %>%
       filter(county == location_i,
              !is.na(get(incidence_var_i)) ) %>%
       mutate(region = county) #%>%
     
-    if (incidence_var_i == 'confirmed'){
+    if (incidence_var_i %in% c('confirmed', 'test_pos') ){
       delayParams = getCountParams('confirmed_cali')
     } else if (incidence_var_i == 'deaths'){
       delayParams = getCountParams('death')
@@ -151,8 +164,10 @@ for (location_i in unique(clean_cali_case_data$county)){
 deconv_result_c['location'] = 'SanJose'
 
 ###########################################################
-## BOEHM - SCAN Pilot Project ####
+## Wastewater data - SCAN Pilot Project ####
 
+# This data is not yet publicly available, so the following will
+# throw an error
 xls_path = '../data/DATA_SCAN_pilot_project.xlsx'
 
 raw_data <- readxl::read_excel(xls_path, sheet = "SanJose", na = c("", "ND") ) %>%
@@ -193,7 +208,6 @@ clean_data <- raw_data %>%
 
 #### Plot wastewater data ####
 plot_raw_ww_data <- clean_data %>%
-  #select(date, orig_data, location, N = n_gene, S = s_gene, ORF1a) %>%
   select(date, orig_data, location, N = n_orig, S = s_orig, ORF1a = orf1a_orig) %>%
   pivot_longer(cols = c(N, S, ORF1a)) %>%
   mutate(name_orig = ifelse(!is.na(orig_data), name, 'Imputed'))
@@ -210,13 +224,10 @@ SCANpilot_data_plot <- ggplot() +
                       labels = c('N', 'S', 'ORF1a', 'Imputed'),
                       breaks = c('N', 'S', 'ORF1a', 'Imputed'),
                       name = 'Variable') + 
-  labs(colour = 'Variable') +
-  theme(
-    axis.title.x =  element_blank(),
-  )
-SCANpilot_data_plot
+  labs(colour = 'Variable')
 
-ggsave(plot = SCANpilot_data_plot, paste0(plot_dir, '/', 'Wastewater_data_raw_Cali.png'), height = 11, width = 9)
+SCANpilot_data_plot
+#ggsave(plot = SCANpilot_data_plot, paste0(plot_dir, '/', 'SJ_wastewater_data.pdf'), height = 11, width = 9)
 
 ###### Deconvolve #####
 
@@ -244,9 +255,11 @@ for (incidence_var_i in c('n_gene', 's_gene', 'ORF1a')){
 ##### Plot #####
 all_deconv_results <- bind_rows(deconv_result, deconv_result_c) %>%
   filter(date >= as_date("2020-11-15"),
-         date <= as_date("2021-03-08")) %>%
-  mutate(plot_row = ifelse(data_type == 'confirmed', 'Cases', 'Wastewater'),
-         plot_row = factor(plot_row, levels = c('Cases', 'Wastewater')))
+         date <= as_date("2021-03-08"),
+         #data_type != 'test_pos'
+  ) %>%
+  mutate(plot_row = ifelse(data_type %in% c('confirmed', 'test_pos'), data_type, 'Wastewater'),
+         plot_row = factor(plot_row, levels = c('confirmed', 'test_pos', 'Wastewater')))
 
 mean_deconv_data <- all_deconv_results %>%
   group_by(date, region, country, data_type, plot_row, location) %>%
@@ -258,64 +271,71 @@ SCANpilot_deconv_plot <- ggplot() +
   geom_errorbar(data = mean_deconv_data, 
                 aes(x=date, ymin = value -sd,  ymax = value +sd, colour = data_type),
                 show.legend = F) +
-  labs(x = 'Date' , y='Infections per day') +
+  labs(x = 'Date' , y='Estimated infection incidence') +
   scale_x_date(limits = c(as_date('2020-11-15'), as_date('2021-03-18')) ) +
-  facet_wrap(vars(plot_row), ncol = 1, scale = 'free_y') +
-  #coord_cartesian(ylim = c(0, 500)) +
-  scale_colour_manual(values = viridis(4), 
+  facet_wrap(vars(plot_row), ncol = 1, scale = 'free_y',
+             labeller = labeller(plot_row = setNames(c('Cases', 'Testing-adjusted cases', 'Wastewater'),
+                                                     c('confirmed', 'test_pos', 'Wastewater')) )) +
+  scale_colour_manual(values = c(viridis(4), "#A72B02"),
                       breaks = c("confirmed",
-                                 "n_gene", "s_gene", 'ORF1a'),
-                      labels = c("Confirmed cases", "N", "S", 'ORF1a'),
+                                 "n_gene", "s_gene", 'ORF1a', 'test_pos'),
+                      labels = c("Confirmed cases", "N", "S", 'ORF1a', "Testing-adjusted cases"),
                       name = 'Variable')
-SCANpilot_deconv_plot
 
-ggsave(plot = SCANpilot_deconv_plot,
-       paste0(plot_dir, '/', 'Deconv_SCANpilot.png'), height = 10, width = 14)
-ggsave(paste0(plot_dir, '/', 'Deconvolution_Boehm.pdf'), height = 10, width = 15)
+SCANpilot_deconv_plot
+#ggsave(paste0(plot_dir, '/', 'SJ_deconv_data.pdf'), height = 10, width = 15)
 
 
 #### R estimate Plots ########
 all_results <- result_c %>%
   mutate(location = 'SanJose')%>%
   filter(date >= as_date("2020-11-15"),
-         date <= as_date("2021-03-08")) %>%
-  bind_rows(result)
+         date <= as_date("2021-03-08"),
+         #data_type == 'confirmed'
+  ) %>%
+  bind_rows(result) %>%
+  mutate(plot_row = ifelse(data_type %in% c('confirmed', 'test_pos'), data_type, 'confirmed')) %>%
+  bind_rows(result) %>%
+  mutate(plot_row = ifelse(is.na(plot_row), 'test_pos', plot_row),
+         plot_row = factor(plot_row, levels = c('confirmed', 'test_pos')))
 # the deconvolution is 10 days prior to last data
 
 SCANpilot_Re_plot <- ggplot(all_results) +
   geom_ribbon(aes(x = date, ymin = median_R_lowHPD,
                   ymax = median_R_highHPD,  fill = variable), alpha = 0.3, show.legend = F) +
-  geom_line(aes(x = date, y = median_R_mean, colour = variable), show.legend = T) +
+  geom_line(aes(x = date, y = median_R_mean, colour = variable), size = 1.2, show.legend = T) +
+  facet_wrap(vars(plot_row), ncol = 1, scale = 'free_y',
+             labeller = labeller(plot_row = setNames(c('Cases', 'Testing-adjusted cases', 'Wastewater'),
+                                                     c('confirmed', 'test_pos', 'Wastewater')) )) +
   geom_hline(yintercept = 1) +
   coord_cartesian(ylim = c(0, 2)) +
   scale_x_date(limits = c(as_date('2020-11-15'), as_date('2021-03-18')) ) +
-  scale_colour_manual(values = viridis(4), 
+  scale_colour_manual(values = c(viridis(4), "#A72B02"),
                       breaks = c("confirmed",
-                                 "n_gene", "s_gene", 'ORF1a'),
-                      labels = c("Confirmed cases", "N", "S", 'ORF1a'),
+                                 "n_gene", "s_gene", 'ORF1a', "test_pos"),
+                      labels = c("Confirmed cases", "N", "S", 'ORF1a', "Testing-adjusted cases"),
                       name = 'Variable') +
-  scale_fill_manual(values = viridis(4), 
+  scale_fill_manual(values = c(viridis(4), "#A72B02"),
                     breaks = c("confirmed",
-                               "n_gene", "s_gene", 'ORF1a'),
-                    labels = c("Confirmed cases", "N", "S", 'ORF1a'),
+                               "n_gene", "s_gene", 'ORF1a', 'test_pos'),
+                    labels = c("Confirmed cases", "N", "S", 'ORF1a', "Testing-adjusted cases"),
                     name = 'Variable') +
   labs( x = 'Date', y = 'Estimated Re', 
         colour = 'Observation Type', fill = 'Observation Type') +
   guides(color = guide_legend(override.aes = list(size=5))) +
   theme(
-    legend.position = 'bottom' 
+    legend.position = 'bottom',
+    strip.text = element_blank()
   )
-SCANpilot_Re_plot 
 
-ggsave(plot = SCANpilot_Re_plot, paste0(plot_dir, '/', 'Wastewater_Re_Boehm.pdf'), height = 14, width = 12)
-ggsave(plot = SCANpilot_Re_plot, paste0(plot_dir, '/', 'Wastewater_Re_SCANpilot.png'), height = 14, width = 12)
+SCANpilot_Re_plot 
+#ggsave(plot = SCANpilot_Re_plot, paste0(plot_dir, '/', 'SJ_wastewater_Re.pdf'), height = 14, width = 12)
 
 ###########################################################
 # Fig 2 for the paper
 
-
 (SCANpilot_data_plot | case_data_plot ) / (SCANpilot_deconv_plot | SCANpilot_Re_plot ) + 
-  plot_layout(guides = "collect") + 
+  plot_layout(height = c(1.5, 2), guides = "collect") + 
   plot_annotation(tag_levels = 'A') & 
   theme(plot.tag = element_text(size = 30),
         legend.position = 'bottom',
@@ -324,7 +344,16 @@ ggsave(plot = SCANpilot_Re_plot, paste0(plot_dir, '/', 'Wastewater_Re_SCANpilot.
         legend.key.size = unit(3,"line") )
 ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot.png'), height = 16, width = 14)
 
-#ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot_SCdata.png'), height = 16, width = 14)
+
+(SCANpilot_deconv_plot | SCANpilot_Re_plot ) + 
+  plot_layout(guides = "collect") + 
+  plot_annotation(tag_levels = 'A') & 
+  theme(plot.tag = element_text(size = 30),
+        legend.position = 'bottom',
+        legend.title = element_blank(),
+        legend.text = element_text(size = 25),
+        legend.key.size = unit(3,"line") )
+ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot_testpos.png'), height = 16, width = 14)
 
 ###########################################################
 ## With all official R ####
@@ -355,37 +384,39 @@ ggsave(paste0(plot_dir, '/', 'Cali_Re_WW_CalCat.png'), height = 12, width = 10)
 
 ######################################################################################################################
 ##### Scan ##################
-for(incubationParam in c('zero', 'incubation')){
-  for (incidence_var in c('s_gene')){
-    
-    meanOpts = seq(0.5, 15, 0.5)
-    sdOpts = seq(0.5, 10, 0.5)
-    
-    deconv_results = cbind(expand_grid(meanOpts, sdOpts), 
-                           'rmse' = NA, 'coverage' = NA, 'mape' = NA)
-    
-    for (row_id in 1:nrow(deconv_results)){
-      deconv_config = try(deconvolveIncidence(clean_data, incidence_var,
-                                              getCountParams(incubationParam), 
-                                              getGammaParams(deconv_results[row_id, 'meanOpts'],
-                                                             deconv_results[row_id, 'sdOpts']),
-                                              smooth_param = TRUE, n_boot = 50))
-      
-      if('try-error' %in% class(deconv_config)){
-        deconv_results[row_id, c('rmse', 'coverage', 'mape')] = c(Inf, 0, Inf)
-        next
-      }
-      
-      Re_config = getReBootstrap(deconv_config)
-      
-      deconv_results[row_id, c('rmse', 'coverage', 'mape')] = compareTraces(Re_config, result_c)
-    }
-    
-    write_csv(deconv_results, paste0('../scan/deconv_Cali_', incubationParam, '_', 
-                                     incidence_var, '_SCdata.csv'))
-    
-  }
-}
+# Takes long to compute, results included in scan folder
+
+# for(incubationParam in c('zero', 'incubation')){
+#   for (incidence_var in c('s_gene')){
+#     
+#     meanOpts = seq(0.5, 15, 0.5)
+#     sdOpts = seq(0.5, 10, 0.5)
+#     
+#     deconv_results = cbind(expand_grid(meanOpts, sdOpts), 
+#                            'rmse' = NA, 'coverage' = NA, 'mape' = NA)
+#     
+#     for (row_id in 1:nrow(deconv_results)){
+#       deconv_config = try(deconvolveIncidence(clean_data, incidence_var,
+#                                               getCountParams(incubationParam), 
+#                                               getGammaParams(deconv_results[row_id, 'meanOpts'],
+#                                                              deconv_results[row_id, 'sdOpts']),
+#                                               smooth_param = TRUE, n_boot = 50))
+#       
+#       if('try-error' %in% class(deconv_config)){
+#         deconv_results[row_id, c('rmse', 'coverage', 'mape')] = c(Inf, 0, Inf)
+#         next
+#       }
+#       
+#       Re_config = getReBootstrap(deconv_config)
+#       
+#       deconv_results[row_id, c('rmse', 'coverage', 'mape')] = compareTraces(Re_config, result_c)
+#     }
+#     
+#     write_csv(deconv_results, paste0('../scan/deconv_Cali_', incubationParam, '_', 
+#                                      incidence_var, '_SCdata.csv'))
+#     
+#   }
+# }
 
 ## Results of scan ####
 scan_options <- expand.grid(incubationParam = c('incubation', 'zero'),
@@ -394,7 +425,7 @@ scan_options <- expand.grid(incubationParam = c('incubation', 'zero'),
 for (row_i in 1:nrow(scan_options)){
   deconv_results <- read_csv(paste0('../scan/deconv_Cali_', 
                                     scan_options[row_i, 'incubationParam'], '_', 
-                                    scan_options[row_i, 'incidence_var'], '_SCdata.csv'),
+                                    scan_options[row_i, 'incidence_var'], '.csv'),
                              col_types = cols(
                                meanOpts = col_double(),
                                sdOpts = col_double(),
@@ -422,7 +453,7 @@ for (row_i in 1:nrow(scan_options)){
     
     ggsave(paste0(plot_dir, '/', 'Scan_Cali_', method, '_',
                   scan_options[row_i, 'incidence_var'], '_',
-                  scan_options[row_i, 'incubationParam'], '_SCdata.png'), height = 10, width = 14)
+                  scan_options[row_i, 'incubationParam'], '.png'), height = 10, width = 14)
   }
   
   
@@ -436,31 +467,34 @@ for (row_i in 1:nrow(scan_options)){
 ###########################################################
 # Plot scan together with the one for Zurich, Fig 3 paper ####
 
+#scanmode = 'incubation'
+scanmode = 'zero'
+
 ZH_deconv_results <- read_csv(paste0('../scan/deconv_', 
-                                  'incubation_', 
-                                  'ZH_', 
-                                  'norm_n1.csv'),
-                           col_types = cols(
-                             meanOpts = col_double(),
-                             sdOpts = col_double(),
-                             rmse_cc = col_double(),
-                             coverage_cc = col_double(),
-                             mape_cc = col_double(),
-                             rmse_h = col_double(),
-                             coverage_h = col_double(),
-                             mape_h = col_double()
-                           ) )
-  
+                                     scanmode, '_', 
+                                     'ZH_', 
+                                     'norm_n1.csv'),
+                              col_types = cols(
+                                meanOpts = col_double(),
+                                sdOpts = col_double(),
+                                rmse_cc = col_double(),
+                                coverage_cc = col_double(),
+                                mape_cc = col_double(),
+                                rmse_h = col_double(),
+                                coverage_h = col_double(),
+                                mape_h = col_double()
+                              ) )
+
 Cali_deconv_results <- read_csv(paste0('../scan/deconv_Cali_', 
-                                  'incubation_', 
-                                  's_gene.csv'),
-                           col_types = cols(
-                             meanOpts = col_double(),
-                             sdOpts = col_double(),
-                             rmse = col_double(),
-                             coverage = col_double(),
-                             mape = col_double()
-                           ) ) %>% 
+                                       scanmode, '_', 
+                                       's_gene.csv'),
+                                col_types = cols(
+                                  meanOpts = col_double(),
+                                  sdOpts = col_double(),
+                                  rmse = col_double(),
+                                  coverage = col_double(),
+                                  mape = col_double()
+                                ) ) %>% 
   mutate(city = 'San Jose')
 
 all_deconv_results <- ZH_deconv_results %>%
@@ -469,62 +503,60 @@ all_deconv_results <- ZH_deconv_results %>%
   bind_rows(Cali_deconv_results) %>%
   mutate(city = factor(city, levels = c('Zurich', 'San Jose')))
 
+
+## Set method here
 combined_plot <- ggplot(all_deconv_results) +
-    geom_tile(aes(x = meanOpts, y = sdOpts, fill = rmse )) +
+  geom_tile(aes(x = meanOpts, y = sdOpts, fill = rmse )) +
+  geom_contour(aes(x = meanOpts, y = sdOpts, z = rmse ), colour = 'black', 
+               binwidth = 0.1*min(all_deconv_results$rmse)) +
   facet_wrap(vars(city)) +
-    labs(x = 'Mean', y = 'Standard deviation', fill = 'RMSE') +
-    scale_fill_viridis(direction = -1)
+  labs(x = 'Mean', y = 'Standard deviation', fill = 'RMSE') +
+  scale_fill_viridis(direction = -1)
 combined_plot
 
-#ggsave(paste0(plot_dir, '/', 'Scan_Cali_ZH.png'), height = 7, width = 20)
-ggsave(paste0(plot_dir, '/', 'Scan_Cali_ZH_incubation.png'), height = 7, width = 20)
+ggsave(paste0(plot_dir, '/', 'Scan_Cali_ZH_RMSE_', scanmode, '.png'), height = 7, width = 20)
 
-###########################################################
-## Looking at the marginal distributions ####
-deconv_results <- read_csv(paste0('../scan/deconv_Cali_', 
-                                  'incubation_', 
-                                  's_gene.csv'),
-                           col_types = cols(
-                             meanOpts = col_double(),
-                             sdOpts = col_double(),
-                             rmse = col_double(),
-                             coverage = col_double(),
-                             mape = col_double()
-                           ) )
 
-# Mean
-deconv_results %>%
-  group_by(meanOpts) %>%
-  summarise(across(c(-sdOpts), .fns = list(mean = mean)),
-            .groups = 'drop') %>%
-  mutate(across(c(-meanOpts, -coverage_mean),
-                ~1-.)) %>%
-  summarise(across(c(-meanOpts), .fns = list(max = ~ meanOpts[which.max(.)],
-                                             #low_ci = ~ meanOpts[which.min(abs(. - quantile(., probs =c(0.05)) )) ],
-                                             #high_ci = ~ meanOpts[which.min(abs(. - quantile(., probs =c(0.95)) )) ] 
-                                             low_ci = ~ meanOpts[which(. == (.[. >= quantile(., probs =c(0.95)) ])[1] )],
-                                             high_ci = ~ meanOpts[which(. == (.[. >= quantile(., probs =c(0.95)) ])[-1] )] 
-                                             #top = ~ meanOpts[which.min(abs(. - (max(.) + 1.96*sd(.)) ))],
-                                             #bot = ~ meanOpts[which.min(abs(. - (max(.) - 1.96*sd(.)) ))]
-  ) )) %>%
-  pivot_longer(cols = everything())
+combined_plot <- ggplot(all_deconv_results) +
+  geom_tile(aes(x = meanOpts, y = sdOpts, fill = coverage )) +
+  geom_contour(aes(x = meanOpts, y = sdOpts, z = coverage ), colour = 'black', 
+               binwidth = 0.1*max(all_deconv_results$coverage)) +
+  facet_wrap(vars(city)) +
+  labs(x = 'Mean', y = 'Standard deviation', fill = 'Coverage') +
+  scale_fill_viridis(direction = 1)
+combined_plot
 
-# SD
-deconv_results %>%
-  group_by(sdOpts) %>%
-  summarise(across(c(-meanOpts), .fns = list(mean = mean)),
-            .groups = 'drop') %>%
-  mutate(across(c(-sdOpts, -coverage_mean),
-                ~1-.)) %>%
-  summarise(across(c(-sdOpts), .fns = list(max = ~ meanOpts[which.max(.)],
-                                           #low_ci = ~ meanOpts[which.min(abs(. - quantile(., probs =c(0.05)) )) ],
-                                           #high_ci = ~ meanOpts[which.min(abs(. - quantile(., probs =c(0.95)) )) ] 
-                                           low_ci = ~ meanOpts[which(. == min(.[. >= quantile(., probs =c(0.95)) ]) )],
-                                           high_ci = ~ meanOpts[which(. == max(.[. >= quantile(., probs =c(0.95)) ]) )] 
-                                           #top = ~ meanOpts[which.min(abs(. - (max(.) + 1.96*sd(.)) ))],
-                                           #bot = ~ meanOpts[which.min(abs(. - (max(.) - 1.96*sd(.)) ))]
-  )) ) %>%
-  pivot_longer(cols = everything())
+ggsave(paste0(plot_dir, '/', 'Scan_Cali_ZH_COV_', scanmode, '.png'), height = 7, width = 20)
+
+
+combined_plot <- ggplot(all_deconv_results) +
+  geom_tile(aes(x = meanOpts, y = sdOpts, fill = mape )) +
+  geom_contour(aes(x = meanOpts, y = sdOpts, z = mape ), colour = 'black', 
+               binwidth = 0.1*min(all_deconv_results$mape)) +
+  facet_wrap(vars(city)) +
+  labs(x = 'Mean', y = 'Standard deviation', fill = 'MAPE') +
+  scale_fill_viridis(direction = -1)
+combined_plot
+
+ggsave(paste0(plot_dir, '/', 'Scan_Cali_ZH_MAPE_', scanmode, '.png'), height = 7, width = 20)
+
+###########
+
+min_method = min(all_deconv_results$mape)
+#min_method = max(all_deconv_results$coverage)
+error_tol = min_method*0.1
+
+all_deconv_results %>%
+  group_by(city) %>%
+  mutate(inv_coverage = - coverage) %>%
+  summarise(across(c(inv_coverage), .fns = list(max_mean = ~ meanOpts[which.min(.)],
+                                                max_sd = ~ sdOpts[which.min(.)],
+                                                bot_mean = ~ range(meanOpts[(. <= min(.)+error_tol)])[1],
+                                                top_mean = ~ range(meanOpts[(. <= min(.)+error_tol)])[2],
+                                                bot_sd = ~ range(sdOpts[(. <= min(.)+error_tol)])[1],
+                                                top_sd = ~ range(sdOpts[(. <= min(.)+error_tol)])[2]
+  ) ))
+
 
 ######################################################################################################################
 # Subsample across weekdays ####
