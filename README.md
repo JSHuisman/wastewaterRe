@@ -1,4 +1,4 @@
-# Wastewater-based estimation of the effective reproductive number of SARS-CoV-2 
+# Wastewater-based estimation of the effective reproductive number of SARS-CoV-2
 
 This repository contains the code for the manuscript "Wastewater-based estimation of the effective reproductive number of SARS-CoV-2" by [Huisman et al.](https://www.medrxiv.org/content/10.1101/2021.04.29.21255961v1).
 
@@ -10,10 +10,10 @@ The code is split into 3 parts:
  - [the analysis of the Zurich data](./code/wastewater_Zurich.R)
  - [the analysis of the San Jose data](./code/wastewater_California.R).
 
-When run from within this repository, the code recreates the [results](./results) and [figures](./figures) for Zurich shown in the manuscript. The settled solids measurements for California will be made accessible soon, whereafter the code can be used to reproduce those figures as well.
+When run from within this repository, the code recreates the [results](./results) and [figures](./figures) shown in the manuscript. 
 
 ## Data
-Includes case incidence data in [Zurich](./data/ZH_case_incidence_data.csv) and [California](./data/COVID-19_case_counts_by_date.csv).
+Includes case incidence data in [Zurich](./data/ZH_case_incidence_data.csv) and [California](./data/COVID-19_case_counts_by_date.csv). The wastewater data for Zurich is also deposited on the [EAWAG open data portal](https://doi.org/10.25678/0003VC), and for San Jose the data used here is a copy of the data included in the [Stanford Digital repository](https://purl.stanford.edu/bx987vn9177).
 
 ## Results
 The scan across SLD parameter pairs takes quite long to compute, so we have added the results (shown in the paper) to the folder ["scan"](./scan).
