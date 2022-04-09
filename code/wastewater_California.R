@@ -63,9 +63,10 @@ R_data <- R_data_raw %>%
   filter(!Method %in% methods_to_exclude)
 
 ###### Case data #####
-urlfile <- "https://data.chhs.ca.gov/dataset/f333528b-4d38-4814-bebb-12db1f10f535/resource/046cdd2b-31e5-4d34-9ed3-b48cdbc4be7a/download/covid19cases_test.csv"
+#urlfile <- "https://data.chhs.ca.gov/dataset/f333528b-4d38-4814-bebb-12db1f10f535/resource/046cdd2b-31e5-4d34-9ed3-b48cdbc4be7a/download/covid19cases_test.csv"
 
-cali_case_data <- read_csv(urlfile)
+#cali_case_data <- read_csv(urlfile)
+cali_case_data <- read_csv('../data/covid19cases_test.csv')
 county_list = "Santa Clara"
 
 ## Clean data 
@@ -73,10 +74,12 @@ first_clean_cali_case_data <- cali_case_data %>%
   filter(area %in% county_list,
          !is.na(date)) %>%
   mutate(confirmed = ifelse(reported_cases <0, 0, reported_cases),
+  #mutate(confirmed = ifelse(reported_cases <0, 1000, reported_cases), # For Fig. S5
          county = area) %>%
   mutate(orig_data = TRUE) %>%
   select(date, county, confirmed, deaths, orig_data) %>%
-  filter(date >= as_date("2020-11-01"))
+  filter(date >= as_date("2020-11-01"),
+         date <= as_date("2021-04-15"))
 
 clean_cali_case_data <- first_clean_cali_case_data %>%
   mutate(location = recode(county,
@@ -84,20 +87,15 @@ clean_cali_case_data <- first_clean_cali_case_data %>%
 
 
 ## Add testing-adjusted cases (test positivity) ####
-mean_tests <- cali_case_data %>% 
-  filter(area %in% county_list,
-         !is.na(date)) %>%
+mean_tests <- first_clean_cali_case_data %>%
   pull(total_tests) %>%
   mean(., na.rm = T)
+# 14960.25
 
 # Note: positive and total tests are by estimated
 # testing date, not reporting date!
-cali_testpos_data <- cali_case_data %>%
-  filter(area %in% county_list,
-         !is.na(date)) %>%
-  mutate(test_pos = (positive_tests / total_tests)*mean_tests,
-         county = area) %>%
-  filter(date >= as_date("2020-11-01"))
+cali_testpos_data <- first_clean_cali_case_data %>%
+  mutate(test_pos = (positive_tests / total_tests)*mean_tests) 
 
 sub_testpos <- cali_testpos_data %>%
   select(date, test_pos)
@@ -121,7 +119,16 @@ case_data_plot <- ggplot(plot_orig_cases) +
 case_data_plot
 #ggsave(plot = case_data_plot, paste0(plot_dir, '/', 'SJ_case_data.pdf'), height = 11, width = 9)
 
+test_case_plot <- ggplot(clean_cali_case_data %>% 
+                           pivot_longer(cols = c('test_pos'))) +
+  geom_bar(aes(x=date, y= value, fill = name), alpha = 0.5,
+           position = 'identity', stat = 'identity', show.legend = F) +
+  labs(x = 'Date' , y='Testing-adjusted \ncases per day') +
+  scale_x_date(limits = c(as_date('2020-11-15'), as_date('2021-03-18')) ) +
+  scale_fill_manual(values = "#A72B02") + 
+  labs(colour = 'Variable') 
 
+test_case_plot
 
 ## Confirmed case Rt #####
 
@@ -134,18 +141,20 @@ for (location_i in unique(clean_cali_case_data$county)){
              !is.na(get(incidence_var_i)) ) %>%
       mutate(region = county) #%>%
     
-    if (incidence_var_i %in% c('confirmed', 'test_pos') ){
+    if (incidence_var_i  == 'confirmed'){
       delayParams = getCountParams('confirmed_cali')
+    } else if (incidence_var_i == 'test_pos'){
+      delayParams = getCountParams('confirmed_cali')
+      #delayParams = getCountParams('zero') # For Fig. S4
     } else if (incidence_var_i == 'deaths'){
       delayParams = getCountParams('death')
     }
-    #delayParams = getCountParams('zero')
     
     new_deconv_result = deconvolveIncidence(select_data,
                                             incidence_var = incidence_var_i,
                                             getCountParams('incubation'),
                                             delayParams,
-                                            smooth_param = TRUE, n_boot = 50) %>%
+                                            smooth_param = TRUE, n_boot = 50) %>% #n_boot = 1000 for the paper
       mutate(county = location_i,
              data_type = incidence_var_i)
     
@@ -166,24 +175,12 @@ deconv_result_c['location'] = 'SanJose'
 ###########################################################
 ## Wastewater data - SCAN Pilot Project ####
 
-# This data is not yet publicly available, so the following will
-# throw an error
-xls_path = '../data/DATA_SCAN_pilot_project.xlsx'
+csv_path = '../data/CA_WW_data.csv'
 
-raw_data <- readxl::read_excel(xls_path, sheet = "SanJose", na = c("", "ND") ) %>%
-    mutate(date = as_date(Date),
-           location = "SanJose") %>%
-    select(date, location, n_gene = `N Gene gc/g dry weight`, 
-           n_top = `N Gene gc/g dry weight UCI`,
-           n_bot = `N Gene gc/g dry weight LCI`, 
-           ORF1a = `ORF1a gc/g dry weight`,
-           s_gene = `S Gene gc/g dry weight`, 
-           s_top = `S Gene gc/g dry weight UCI`, s_bot = `S Gene gc/g dry weight LCI`,
-           bcov = `BCoV Recovery`, pmmov = `PMMoV gc/g dry weight`) %>%
+raw_data <- read.csv(csv_path) %>%
     mutate(n_orig = n_gene,
            s_orig = s_gene,
-           orf1a_orig = ORF1a) %>%
-    filter(!is.na(date) ) 
+           orf1a_orig = ORF1a)
 
 ## Normalisation ####
 norm_min <- raw_data %>%
@@ -213,11 +210,11 @@ plot_raw_ww_data <- clean_data %>%
   mutate(name_orig = ifelse(!is.na(orig_data), name, 'Imputed'))
 
 SCANpilot_data_plot <- ggplot() +
-  geom_point(data = plot_raw_ww_data, aes(x=date, y= value, colour = name_orig),
+  geom_point(data = plot_raw_ww_data, aes(x=date, y= value, colour = name_orig, shape = name_orig),
              size = 2, show.legend = F) +
   geom_line(data = plot_raw_ww_data %>% filter(orig_data), 
             aes(x=date, y= value, colour = name), linetype = 'dotted', show.legend = F) +
-  labs(x = 'Date' , y='Gene copies per gr dry weight') +
+  labs(x = 'Date' , y='Gene copies per \ngr dry weight') +
   scale_x_date(limits = c(as_date('2020-11-15'), as_date('2021-03-18')) 
   ) +
   scale_colour_manual(values = c(viridis(4)[2:4], 'lightgrey'), 
@@ -238,7 +235,7 @@ for (incidence_var_i in c('n_gene', 's_gene', 'ORF1a')){
                                           incidence_var = incidence_var_i,
                                           getCountParams('incubation'), 
                                           getCountParams('benefield'),
-                                          smooth_param = TRUE, n_boot = 50) %>%
+                                          smooth_param = TRUE, n_boot = 50) %>% #n_boot = 1000 in paper
     mutate(data_type = incidence_var_i)
   
   new_result = getReBootstrap(new_deconv_result)
@@ -259,7 +256,7 @@ all_deconv_results <- bind_rows(deconv_result, deconv_result_c) %>%
          #data_type != 'test_pos'
   ) %>%
   mutate(plot_row = ifelse(data_type %in% c('confirmed', 'test_pos'), data_type, 'Wastewater'),
-         plot_row = factor(plot_row, levels = c('confirmed', 'test_pos', 'Wastewater')))
+         plot_row = factor(plot_row, levels = c('Wastewater', 'confirmed', 'test_pos')))
 
 mean_deconv_data <- all_deconv_results %>%
   group_by(date, region, country, data_type, plot_row, location) %>%
@@ -268,19 +265,34 @@ mean_deconv_data <- all_deconv_results %>%
             .groups = 'drop')
 
 SCANpilot_deconv_plot <- ggplot() +
-  geom_errorbar(data = mean_deconv_data, 
-                aes(x=date, ymin = value -sd,  ymax = value +sd, colour = data_type),
-                show.legend = F) +
-  labs(x = 'Date' , y='Estimated infection incidence') +
+  geom_ribbon(data = mean_deconv_data %>% filter(plot_row != 'Wastewater'), 
+              aes(x=date, ymin = value -sd,  ymax = value +sd, fill = data_type),
+              alpha = 0.5, show.legend = F) +
+  ggpattern::geom_ribbon_pattern(data = mean_deconv_data %>% filter(plot_row == 'Wastewater'), 
+                                 aes(x = date, ymin = value -sd,  ymax = value +sd, 
+                                     colour = data_type, fill = data_type,
+                                     pattern_colour = data_type, 
+                                     pattern = 'stripe', pattern_angle = data_type), 
+                                 pattern_spacing = 0.1, pattern_density = 0.01, 
+                                 alpha = 0.2, show.legend = F) +
+  labs(x = 'Date' , y='Estimated infection incidence per day') +
   scale_x_date(limits = c(as_date('2020-11-15'), as_date('2021-03-18')) ) +
   facet_wrap(vars(plot_row), ncol = 1, scale = 'free_y',
              labeller = labeller(plot_row = setNames(c('Cases', 'Testing-adjusted cases', 'Wastewater'),
                                                      c('confirmed', 'test_pos', 'Wastewater')) )) +
+  scale_fill_manual(values = c(viridis(4), "#A72B02"),
+                    breaks = c("confirmed",
+                               "n_gene", "s_gene", 'ORF1a', 'test_pos'),
+                    labels = c("Confirmed cases", "N", "S", 'ORF1a', "Testing-adjusted cases"),
+                    name = 'Variable') +
   scale_colour_manual(values = c(viridis(4), "#A72B02"),
                       breaks = c("confirmed",
                                  "n_gene", "s_gene", 'ORF1a', 'test_pos'),
                       labels = c("Confirmed cases", "N", "S", 'ORF1a', "Testing-adjusted cases"),
-                      name = 'Variable')
+                      name = 'Variable') +
+  ggpattern::scale_pattern_angle_manual(values = c(n_gene = 180, s_gene = 135, ORF1a = 45)) +
+  ggpattern::scale_pattern_colour_manual(values = c(n_gene = viridis(4)[2], 
+                                                    s_gene = viridis(4)[3], ORF1a = viridis(4)[4]))
 
 SCANpilot_deconv_plot
 #ggsave(paste0(plot_dir, '/', 'SJ_deconv_data.pdf'), height = 10, width = 15)
@@ -301,14 +313,23 @@ all_results <- result_c %>%
 # the deconvolution is 10 days prior to last data
 
 SCANpilot_Re_plot <- ggplot(all_results) +
-  geom_ribbon(aes(x = date, ymin = median_R_lowHPD,
-                  ymax = median_R_highHPD,  fill = variable), alpha = 0.3, show.legend = F) +
+  geom_ribbon(data = all_results %>% filter(variable %in% c('confirmed', 'test_pos')),
+              aes(x = date, ymin = median_R_lowHPD,
+                  ymax = median_R_highHPD,  fill = variable), alpha = 0.5, show.legend = F) +
+  ggpattern::geom_ribbon_pattern(data = all_results %>% filter(!variable %in% c('confirmed', 'test_pos')),
+                                 aes(x = date, ymin = median_R_lowHPD,
+                                     ymax = median_R_highHPD, colour = variable, 
+                                     fill = variable,
+                                     pattern_colour = variable, 
+                                     pattern = 'stripe', pattern_angle = variable), 
+                                 pattern_spacing = 0.1, pattern_density = 0.01, 
+                                 alpha = 0.2, show.legend = F) +
   geom_line(aes(x = date, y = median_R_mean, colour = variable), size = 1.2, show.legend = T) +
   facet_wrap(vars(plot_row), ncol = 1, scale = 'free_y',
              labeller = labeller(plot_row = setNames(c('Cases', 'Testing-adjusted cases', 'Wastewater'),
                                                      c('confirmed', 'test_pos', 'Wastewater')) )) +
   geom_hline(yintercept = 1) +
-  coord_cartesian(ylim = c(0, 2)) +
+  coord_cartesian(ylim = c(0.25, 1.75)) +
   scale_x_date(limits = c(as_date('2020-11-15'), as_date('2021-03-18')) ) +
   scale_colour_manual(values = c(viridis(4), "#A72B02"),
                       breaks = c("confirmed",
@@ -320,9 +341,12 @@ SCANpilot_Re_plot <- ggplot(all_results) +
                                "n_gene", "s_gene", 'ORF1a', 'test_pos'),
                     labels = c("Confirmed cases", "N", "S", 'ORF1a', "Testing-adjusted cases"),
                     name = 'Variable') +
+  ggpattern::scale_pattern_angle_manual(values = c(n_gene = 180, s_gene = 135, ORF1a = 45)) +
+  ggpattern::scale_pattern_colour_manual(values = c(n_gene = viridis(4)[2], 
+                                                    s_gene = viridis(4)[3], ORF1a = viridis(4)[4])) +
   labs( x = 'Date', y = 'Estimated Re', 
         colour = 'Observation Type', fill = 'Observation Type') +
-  guides(color = guide_legend(override.aes = list(size=5))) +
+  guides(color = guide_legend(override.aes = list(size=5)), pattern_angle = "none", pattern_colour = "none") +
   theme(
     legend.position = 'bottom',
     strip.text = element_blank()
@@ -334,26 +358,23 @@ SCANpilot_Re_plot
 ###########################################################
 # Fig 2 for the paper
 
-(SCANpilot_data_plot | case_data_plot ) / (SCANpilot_deconv_plot | SCANpilot_Re_plot ) + 
-  plot_layout(height = c(1.5, 2), guides = "collect") + 
+((SCANpilot_data_plot / case_data_plot / test_case_plot ) | SCANpilot_deconv_plot) / SCANpilot_Re_plot + 
+  #plot_layout(guides = "collect") + 
+  plot_layout(height = c(3,2), guides = "collect") + 
   plot_annotation(tag_levels = 'A') & 
   theme(plot.tag = element_text(size = 30),
         legend.position = 'bottom',
         legend.title = element_blank(),
         legend.text = element_text(size = 25),
         legend.key.size = unit(3,"line") )
-ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot.png'), height = 16, width = 14)
+ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot.png'), height = 18, width = 14)
+ggsave(paste0(plot_dir, '/', 'Fig2.pdf'), height = 18, width = 14)
 
+## with Dec 30 filled with 1500
+#ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot_filled.png'), height = 18, width = 14)
 
-(SCANpilot_deconv_plot | SCANpilot_Re_plot ) + 
-  plot_layout(guides = "collect") + 
-  plot_annotation(tag_levels = 'A') & 
-  theme(plot.tag = element_text(size = 30),
-        legend.position = 'bottom',
-        legend.title = element_blank(),
-        legend.text = element_text(size = 25),
-        legend.key.size = unit(3,"line") )
-ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot_testpos.png'), height = 16, width = 14)
+## with symptom-onset to test delay = 0
+#ggsave(paste0(plot_dir, '/', 'Fig_Cali_SCANpilot_notestdelay.png'), height = 18, width = 14)
 
 ###########################################################
 ## With all official R ####
@@ -648,6 +669,96 @@ ggplot(all_sampled_Restimates) +
         colour = 'Sampling Type', fill = 'Sampling Type') +
   guides(color = guide_legend(override.aes = list(size=5))) + 
   theme(legend.position = 'bottom')
+
+ggsave(paste0(plot_dir, '/', 'Re_subsampling_Cali_ZH.png'), height = 14, width = 12)
+
+##### New revised plot with separate legends #####
+
+plot1 <- ggplot(all_sampled_Restimates %>% filter(category %in% c(1,7))) +
+  geom_ribbon(aes(x = date, ymin = median_R_lowHPD,
+                  ymax = median_R_highHPD, fill = sampling),
+              alpha = 0.4, show.legend = F) +
+  geom_line(aes(x = date, y = median_R_mean, colour = sampling), 
+            alpha = 1, show.legend = T) +
+  geom_hline(yintercept = 1) +
+  facet_wrap(vars(region), scale = 'free_x') +
+  coord_cartesian(ylim = c(0, 2)) +  
+  scale_colour_manual(values = viridis(10)[c(1,4,9,6)]) + 
+  scale_fill_manual(values = viridis(10)[c(1,4,9,6)]) +
+  labs( x = 'Date', y = 'Estimated Re', 
+        colour = 'Sampling \nScheme', fill = 'Sampling \nScheme') +
+  guides(color = guide_legend(override.aes = list(size=5))) + 
+  theme(legend.position = 'right',
+        panel.spacing = unit(2, 'lines'),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank())
+
+plot2 <- ggplot(all_sampled_Restimates %>% filter(category %in% c(2,7))) +
+  geom_ribbon(aes(x = date, ymin = median_R_lowHPD,
+                  ymax = median_R_highHPD, fill = sampling),
+              alpha = 0.4, show.legend = F) +
+  geom_line(aes(x = date, y = median_R_mean, colour = sampling), 
+            alpha = 1, show.legend = T) +
+  geom_hline(yintercept = 1) +
+  facet_wrap(vars(region), scale = 'free_x') +
+  coord_cartesian(ylim = c(0, 2)) +  
+  scale_colour_manual(values = viridis(10)[c(2,5,10,6)]) + 
+  scale_fill_manual(values = viridis(10)[c(2,5,10,6)]) +
+  labs( x = 'Date', y = 'Estimated Re', 
+        colour = 'Sampling Type', fill = 'Sampling Type') +
+  guides(color = guide_legend(override.aes = list(size=5))) + 
+  theme(legend.position = 'right',
+        panel.spacing = unit(2, 'lines'),
+        strip.text = element_blank(),
+        legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank())
+
+plot3 <- ggplot(all_sampled_Restimates %>% filter(category %in% c(3,7))) +
+  geom_ribbon(aes(x = date, ymin = median_R_lowHPD,
+                  ymax = median_R_highHPD, fill = sampling),
+              alpha = 0.4, show.legend = F) +
+  geom_line(aes(x = date, y = median_R_mean, colour = sampling), 
+            alpha = 1, show.legend = T) +
+  geom_hline(yintercept = 1) +
+  facet_wrap(vars(region), scale = 'free_x') +
+  coord_cartesian(ylim = c(0, 2)) +  
+  scale_colour_manual(values = viridis(10)[c(3,8,6)]) + 
+  scale_fill_manual(values = viridis(10)[c(3,8,6)]) +
+  labs( x = 'Date', y = 'Estimated Re', 
+        colour = 'Sampling Type', fill = 'Sampling Type') +
+  guides(color = guide_legend(override.aes = list(size=5))) + 
+  theme(legend.position = 'right',
+        panel.spacing = unit(2, 'lines'),
+        strip.text = element_blank(),
+        legend.title = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_blank())
+
+plot5 <- ggplot(all_sampled_Restimates %>% filter(category %in% c(5,7))) +
+  geom_ribbon(aes(x = date, ymin = median_R_lowHPD,
+                  ymax = median_R_highHPD, fill = sampling),
+              alpha = 0.4, show.legend = F) +
+  geom_line(aes(x = date, y = median_R_mean, colour = sampling), 
+            alpha = 1, show.legend = T) +
+  geom_hline(yintercept = 1) +
+  facet_wrap(vars(region), scale = 'free_x') +
+  coord_cartesian(ylim = c(0, 2)) +  
+  scale_colour_manual(values = c("#A72B02", viridis(10)[6]) ) + 
+  scale_fill_manual(values = c("#A72B02", viridis(10)[6]) ) +
+  labs( x = 'Date', y = 'Estimated Re', 
+        colour = 'Sampling Type', fill = 'Sampling Type') +
+  guides(color = guide_legend(override.aes = list(size=5))) + 
+  theme(legend.position = 'right',
+        panel.spacing = unit(2, 'lines'),
+        strip.text = element_blank(),
+        legend.title = element_blank())
+
+plot1 + plot2 + plot3 + plot5 +
+  plot_layout(ncol = 1)
 
 ggsave(paste0(plot_dir, '/', 'Re_subsampling_Cali_ZH.png'), height = 14, width = 12)
 

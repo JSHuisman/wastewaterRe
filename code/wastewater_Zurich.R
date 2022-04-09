@@ -43,34 +43,27 @@ theme_set(theme_minimal() +
 
 ###########################################################
 ### ZURICH ####
-ZH_flow_url = "http://parsivel-eawag.ch/sarscov2/__data__/ARA%20Werdhoelzli_flow_cases.csv"
-ZH_genes_url = "http://parsivel-eawag.ch/sarscov2/__data__/ARA%20Werdhoelzli_genes.csv"
-
-raw_flow_data_ZH <- read_delim(ZH_flow_url, delim = ';',
-                               col_names = c('date', 'cases', 'cases_smooth', 
-                                             'flow', 'n1_smooth', 'n2_smooth'),
-                               col_types = cols(date = col_date(format = '')),
-                               skip = 1) 
-
-raw_gene_data_ZH <- read_delim(ZH_genes_url, delim = ';',
-                               col_names = c('date', 'n1', 'n2'),
-                               col_types = cols(date = col_date(format = '')),
-                               skip = 1) 
-
 # We filter after Sept 1 because the data prior is often below LOQ
 # We select data up to January 20th, because the sampling changed after
 # 29th of October is removed because of quality control
 # Missing data is imputed with linear interpolation
-raw_data_ZH <- raw_flow_data_ZH %>%
-  left_join(raw_gene_data_ZH, c('date')) %>%
-  filter(!is.na(n1),
-         date >= as_date("2020-09-01"),
+raw_data_ZH <- read_csv('../data/ZH_WW_data.csv') %>%
+  filter(date >= as_date("2020-09-01"),
          date <= as_date("2021-01-20"),
          date != as_date("2020-10-29")) %>%
   mutate(orig_data = TRUE) %>%
   complete(date = seq.Date(min(date), max(date), by = 'days')) %>%
   mutate(across(where(is.numeric), ~ zoo::na.approx(.x, na.rm = F) )) %>%
   mutate(region = 'ZH')
+
+# Plot `raw' WW data #####
+# 
+# ggplot(raw_data_ZH, aes(x=date, y = n1)) +
+#   geom_point(colour = 'blue') +
+#   geom_line(colour = 'black', linetype = 'dashed') +
+#   geom_smooth(method = 'loess', colour = 'black',
+#               method.args = list(span = 0.05, degree = 1) ) +
+#   labs(x = 'Date' , y='N2 load')
 
 ###########################################################
 ##### Catchment Level: Clinical Case Data  #####
@@ -105,7 +98,7 @@ for(inc_var in c('confirmed')){
                                         incidence_var = inc_var,
                                         getCountParams('incubation'), 
                                         getCountParams(paste0(inc_var, '_zh')),
-                                        smooth_param = TRUE, n_boot = 50)
+                                        smooth_param = TRUE, n_boot = 50) #n_boot = 1000 for paper
   new_Re = getReBootstrap(new_deconv_data) 
 
   deconv_cases <- bind_rows(deconv_cases, new_deconv_data)
@@ -149,7 +142,7 @@ plot_raw_ww_data <- ww_data %>%
   mutate(name_orig = ifelse(!is.na(orig_data), name, 'Imputed'))
 
 ww_data_plot <- ggplot() +
-  geom_point(data = plot_raw_ww_data, aes(x=date, y= value, colour = name_orig),
+  geom_point(data = plot_raw_ww_data, aes(x=date, y= value, colour = name_orig, shape = name_orig),
              size = 2, show.legend = F) +
   geom_line(data = plot_raw_ww_data %>% filter(orig_data), 
             aes(x=date, y= value,colour = name), linetype = 'dotted', show.legend = F) +
@@ -183,7 +176,7 @@ for(row_i in 1:nrow(config_df)){
                                         incidence_var = config_df[row_i, 'incidence_var'],
                                         getCountParams(as.character(config_df[row_i, 'FirstGamma'])), 
                                         getCountParams(as.character(config_df[row_i, 'SecondGamma'])),
-                                        smooth_param = TRUE, n_boot = 50)
+                                        smooth_param = TRUE, n_boot = 50) #n_boot in paper: 1000
   
   new_deconv_data <- new_deconv_data %>%
     mutate(incidence_var = config_df[row_i, 'incidence_var'])
@@ -210,21 +203,31 @@ mean_deconv_data <- all_deconv_results %>%
             .groups = 'drop')
 
 deconv_plot <- ggplot() +
-  geom_errorbar(data = mean_deconv_data, 
-                aes(x=date, ymin = value -sd,  ymax = value +sd, colour = data_type),
-                show.legend = T) +
+  geom_ribbon(data = mean_deconv_data %>% filter(plot_row == 'Cases'), 
+              aes(x=date, ymin = value -sd,  ymax = value +sd, fill = data_type),
+              alpha = 0.5, show.legend = F) +
   facet_wrap(vars(plot_row), ncol = 1, scale = 'free_y') +
-  labs(x = 'Date' , y='Estimated infection incidence') +
+  labs(x = 'Date' , y='Estimated infection incidence per day') +
   scale_x_date(limits = c(as_date('2020-08-15'), as_date('2021-01-20')) ) +
-  scale_colour_manual(values = viridis(4),
+  ggpattern::geom_ribbon_pattern(data = mean_deconv_data %>% filter(plot_row == 'Wastewater'), 
+                                 aes(x = date, ymin = value -sd,  ymax = value +sd, 
+                                     colour = data_type, fill = data_type,
+                                     pattern_colour = ifelse(data_type == 'infection_norm_n1', viridis(4)[3], viridis(4)[4]), 
+                                     pattern = 'stripe', pattern_angle = ifelse(data_type == 'infection_norm_n1', 135, 45)), 
+                                 pattern_spacing = 0.1, pattern_density = 0.01, 
+                                 alpha = 0.2, show.legend = F) +
+  scale_colour_manual(values = viridis(4), 
                       breaks = c("infection_confirmed", "x",
                                  "infection_norm_n1", "infection_norm_n2"),
                       labels = c("Confirmed cases", "x", "N1", "N2"),
-                      name = 'Variable') +
-  guides(color = guide_legend(override.aes = list(size=5))) +
+                      name = 'Variable') + 
+  scale_fill_manual(values = viridis(4), 
+                    breaks = c("infection_confirmed", "x",
+                               "infection_norm_n1", "infection_norm_n2"),
+                    labels = c("Confirmed cases", "x", "N1", "N2"),
+                    name = 'Variable') +
   theme(
-    legend.position = 'bottom',
-    panel.spacing.y = unit(2, "lines")
+    panel.spacing.y = unit(3, "lines")
   )
 
 
@@ -256,15 +259,20 @@ Re_ww <- Re_ww %>%
 Re_plot <- ggplot() +
   geom_ribbon(data = plotData, aes(x = date, ymin = median_R_lowHPD,
                                    ymax = median_R_highHPD, fill = data_type),
-              alpha = 0.3, show.legend = F) +
+              alpha = 0.4, show.legend = F) +
+  ggpattern::geom_ribbon_pattern(data = Re_ww, aes(x = date, ymin = median_R_lowHPD,
+                                                   ymax = median_R_highHPD, colour = variable, fill = variable,
+                                                   pattern_colour = ifelse(variable == 'N1', viridis(4)[3], viridis(4)[4]), 
+                                                   pattern = 'stripe', pattern_angle = ifelse(variable == 'N1', 135, 45)), 
+                                 pattern_spacing = 0.1, pattern_density = 0.01, 
+                                 alpha = 0.2, show.legend = F) +
   geom_line(data = plotData,
             aes(x = date, y = median_R_mean, colour = data_type), alpha = 1, size = 1.2, show.legend = F) +
-  geom_ribbon(data = Re_ww, aes(x = date, ymin = median_R_lowHPD,
-                                ymax = median_R_highHPD,  fill = variable), alpha = 0.3, show.legend = F) +
   geom_line(data = Re_ww, 
             aes(x = date, y = median_R_mean, colour = variable), alpha = 1, size = 1.2,  show.legend = T) +
   geom_hline(yintercept = 1) +
-  coord_cartesian(ylim = c(0, 2.0)) +
+  facet_grid(cols = vars(region), rows = vars(plot_row), scale = 'free_x') +
+  coord_cartesian(ylim = c(0.25, 2.5)) +
   scale_colour_manual(values = viridis(4), 
                       breaks = c("Confirmed cases", "x",
                                  "N1", "N2"),
@@ -291,16 +299,16 @@ Re_plot
 ##############
 # Fig 1 for the paper
 
-(ww_data_plot | case_data_plot ) / ( deconv_plot | Re_plot ) + 
-  plot_layout(heights=c(1, 1), guides = "collect") + 
+((ww_data_plot / case_data_plot ) | deconv_plot) / Re_plot + 
+  plot_layout(heights=c(2, 1), guides = "collect") + 
   plot_annotation(tag_levels = 'A') & 
   theme(plot.tag = element_text(size = 30),
         legend.position = 'bottom',
         legend.title = element_blank(),
         legend.text = element_text(size = 25),
-        legend.key.size = unit(3,"line") )
-
+        legend.key.size = unit(3,"line"))
 ggsave(paste0(plot_dir, '/', 'Fig1.png'), height = 16, width = 14)
+ggsave(paste0(plot_dir, '/', 'Fig1.pdf'), height = 16, width = 14)
 
 ###########################################################
 ## Compare RMSE of wastewater and case report traces ####
@@ -348,8 +356,8 @@ rmse_matrix
 
 ######################################################################################################################
 #Scan across deconvolution parameters ####
+# Commented out because this takes about 2 hrs per scan
 
-# Uncommented because this takes about 2 hrs per scan
 # for (incubationParam in c('zero', 'incubation')){
 #   for (incidence_var in c('norm_n1')){
 #     for (canton in c('ZH')){
@@ -449,7 +457,7 @@ for (row_i in 1:nrow(scan_options)){
 ## Further plots and analyses are in the wastewater_California.R file ####
 
 ######################################################################################################################
-# Results for optimal scan - Fig SX ####
+# Results for optimal scan - Fig S12 ####
 methods_vec <- c('RMSE', 'Coverage', 'MAPE', 'Example.A', 'Example.B')
 
 config_df = data.frame("region" = c('ZH'),  
@@ -556,23 +564,8 @@ dist_plot / Re_plot +
 
 ggsave(paste0(plot_dir, '/', 'ZH_wastewater_Re_optim.png'), height = 12, width = 14)
 
-#######
-
-params = expand.grid(mean = seq(0.5, 15, 0.5), sd = seq(0.5, 10, 0.5)) %>%
-  mutate(data.frame(getGammaParams(mean, sd))) %>%
-  rename(shape_in = shape, scale_in = scale) %>%
-  rowwise() %>%
-  mutate(med = median(rgamma(100000, shape = shape_in, scale = scale_in)) )
-
-median_plot <- ggplot(data= params, aes(x=mean, fill = med, y = sd))+
-  geom_tile()
-median_plot
-
-
-
-
 ######################################################################################################################
-# Results for a number of SLDs - Fig SX ####
+# Results for a number of SLDs - Fig S8 ####
 
 # We select data up to January 20th, because the sampling changed after
 ww_data = raw_data_ZH %>%
@@ -691,7 +684,7 @@ deconv_plot + Re_plot +
   theme(plot.tag = element_text(size = 25))
 ggsave(paste0(plot_dir, '/', 'Supp_Fig_SLDs.png'), height = 16, width = 14)
 
-#### Different normalisations ######
+#### Different normalisations - Fig. S9 ######
 
 plot_deconv_data <- deconv_ww_data %>% 
   filter(replicate == 0) %>%
@@ -775,7 +768,7 @@ ggsave(paste0(plot_dir, '/', 'Supp_Fig_norm_SLDs.png'), height = 16, width = 14)
 ######################################################################################################################
 # Subsample across weekdays ####
 
-daily_data_ZH <- raw_gene_data_ZH %>%
+daily_data_ZH <- raw_data_ZH %>%
   filter(date > as_date("2020-11-22") & date < as_date("2021-01-11")) %>%
   mutate(day = wday(date),
          region = 'ZH') %>% # 1 is Monday
